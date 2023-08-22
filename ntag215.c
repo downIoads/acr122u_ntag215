@@ -73,15 +73,13 @@ void CloseReader(PSCARD_DUAL_HANDLE pHandle)
 	SCardReleaseContext(pHandle->hContext);
 }
 
-int FastReadFromTag(BYTE fromPage, BYTE toPage) {
+int FastReadFromTag(BYTE fromPage, BYTE toPage, UINT16 replySize) {
 	// ff 00 00 00 05 (communicate with pn532 and 05 byte command will follow)
 	// d4 (data exchange command)
 	// 42 (InCommunicateThru)
 	// 3a (FastRead) [page 39 of ntag21x document]
 	const BYTE APDU_Read[] = { 0xff, 0x00, 0x00, 0x00, 0x05, 0xd4, 0x42, 0x3a, fromPage, toPage };
 	UINT16 apduReadLength = sizeof(APDU_Read) / sizeof(APDU_Read[0]);
-
-	int arrayLastElementIndex = (toPage - fromPage + 1) * 4 + 5 - 1;		// 4 bytes per page, +5 because prefix d5 43 00 and suffix 90 00, -1 because array starts count at 0
 
 	SCARD_DUAL_HANDLE hDual;
 	BYTE Buffer[600];    // im using ntag215 so this will be enough even when reading entire user data
@@ -96,12 +94,18 @@ int FastReadFromTag(BYTE fromPage, BYTE toPage) {
 		{
 
 			// check for success (success code is stored after the data read, so read the last two bytes of the buffer)
-			if (!(Buffer[arrayLastElementIndex-1] == 0x90 && Buffer[arrayLastElementIndex] == 0x00)) {
+			if (!(Buffer[replySize -2] == 0x90 && Buffer[replySize-1] == 0x00)) {
+				wprintf(L"test\n");
+				wprintf(Buffer[replySize - 2]);
+				wprintf(Buffer[replySize - 1]);
+				
 				CloseReader(&hDual);
 				wprintf(L"Error code received. Aborting..\n");
 				return 1;
 			}
-			
+			else {
+				wprintf(L"\nSuccessfully fast-read the specified page interval.\n");
+			}
 		}
 		else {
 			wprintf(L"Failed to read pages.");
@@ -120,9 +124,20 @@ int FastReadFromTag(BYTE fromPage, BYTE toPage) {
 
 int main() {
 	BYTE fromPage = 0x04;
-	BYTE toPage = 0x22;
-	
-	FastReadFromTag(fromPage, toPage);
+	BYTE toPage = 0x43;	//0x81 is last user data page
+	if (toPage > 0x86 || fromPage < 0x00 || toPage < fromPage) {	//0x86 is last page of ntag215 (0x2C for ntag213, 0xE6 for ntag216)
+		wprintf(L"Invalid page range.\n");
+		return 1;
+	}
+
+	UINT16 replySize = (toPage - fromPage + 1) * 4 + 5;		// 4 bytes per page, +5 because prefix d5 43 00 and suffix 90 00
+	// page 29 of PN532 application note says "Maximum up to 256 data bytes can be transmitted between the reader and the the PN532(short APDU)" (nice typo btw)
+	if ( (toPage-fromPage) > 62 ) {
+		wprintf(L"Max byte transmission workaround required. TODO\n");
+		return 1;
+	}
+
+	FastReadFromTag(fromPage, toPage, replySize);
 
 	return 0;
 }
