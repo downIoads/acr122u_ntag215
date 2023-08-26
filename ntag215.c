@@ -200,9 +200,84 @@ int FastRead() {
 	return 0;
 }
 
+int WriteToTag(BYTE toPage, BYTE* data) {
+	// ff 00 00 00 05 (communicate with pn532 and 05 byte command will follow)
+	// d4 (data exchange command)
+	// 42 (InCommunicateThru)
+	// a2 (Write) [page 41 of ntag21x document]
+	BYTE APDU_Write[9 + 4] = { 0xff, 0x00, 0x00, 0x00, 0x08, 0xd4, 0x42, 0xa2, toPage };
+	memcpy_s(APDU_Write + 9, 4, data, 4);
+
+	SCARD_DUAL_HANDLE hDual;
+	BYTE Buffer[5];
+	UINT16 cbBuffer;	// usually will be 2 (e.g. response 90 00 for success)
+
+	// my Laptop:	"ACS ACR122U PICC Interface 0"
+	// my PC:		"ACS ACR122 0"
+	if (OpenReader(L"ACS ACR122 0", &hDual))
+	{
+		cbBuffer = 5; // 5 byte reply expected
+		if (SendRecvReader(&hDual, APDU_Write, 13, Buffer, &cbBuffer))
+		{
+
+			// check for success (success code is stored after the data read, so read the last two bytes of the buffer)
+			if (!(Buffer[3] == 0x90 && Buffer[4] == 0x00)) {
+
+				CloseReader(&hDual);
+				wprintf(L"Error code received. Aborting..\n");
+				return 1;
+			}
+
+			else {
+				wprintf(L"Successful Write.\n\n");
+			}
+		}
+		else {
+			wprintf(L"Failed to write to page.\n");
+			CloseReader(&hDual);
+			return 1;
+		}
+
+		CloseReader(&hDual);
+		return 0;
+	}
+
+	else {
+		wprintf(L"Failed to find NFC reader.\n");
+		return 1;
+	}
+}
+
+// writes 0x00 0x00 0x00 0x00 into every page from 0x04 - 0x81 (NTAG215 ONLY. dont use this with other Ntags...)
+int DeleteAllUserData() {
+	BYTE Msg[4] = { 0x00, 0x00, 0x00, 0x00 };
+	for (int j = 0x04; j < 0x82; ++j) {
+		int status = WriteToTag(j, &Msg);
+		if (status != 0) {
+			wprintf(L"Error occurred while writing. Terminating.. \n");
+		}
+
+	}
+}
+
 int main() {
-	int status = FastRead();
+	// READ
+	// int status = FastRead();
 
+
+	// WRITE ONE PAGE
+	/*
+	BYTE Msg[4] = { 0x79, 0x6f, 0x79, 0x6f };
+	BYTE Page = 0x80;	// 0x04 - 0x81 is user data (safe to write). other pages might be dangerous if you are clueless
+	if (Page > 0x86 || Page < 0x02) {		// doesnt exist || read only pages
+		wprintf(L"Invalid target page.\n");
+		return -1;
+	}
+	int status = WriteToTag(0x80, &Msg);
+	*/
+
+	// DELETE ALL USER DATA (NTAG215 ONLY)
+	int status = DeleteAllUserData();
+	
 	return status;
-
 }
