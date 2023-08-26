@@ -273,7 +273,7 @@ int main() {
 		wprintf(L"Invalid target page.\n");
 		return -1;
 	}
-	int status = WriteToTag(0x80, &Msg);
+	int status = WriteToTag(Page, &Msg);
 	*/
 
 	// DELETE ALL USER DATA (NTAG215 ONLY)
