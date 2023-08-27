@@ -3,12 +3,48 @@
 #include <stdio.h>
 #include <windows.h>
 #include <winscard.h>
+#include <malloc.h>
+
+#define LEN(arr) ((UINT16) (sizeof (arr) / sizeof (arr)[0]))	// easier determining of sizes
 
 typedef struct _SCARD_DUAL_HANDLE {
 	SCARDCONTEXT hContext;
 	SCARDHANDLE hCard;
 } SCARD_DUAL_HANDLE, * PSCARD_DUAL_HANDLE;
 
+struct NDEFShortRecord {
+	BYTE RECORD_INFO;	// i mean the byte for MB ME CF SR IL TNF
+	BYTE TYPE_LENGTH;
+	BYTE PAYLOAD_LENGTH;
+	BYTE TYPE;
+	const BYTE* PAYLOAD;
+};
+
+void NewNDEFShortRecord(struct NDEFShortRecord* record, BYTE recInfo, BYTE typeLen, BYTE payloadLen, BYTE type, const BYTE* payload) {
+	record->RECORD_INFO = recInfo;	// 0x91 for first record (if multiple records exist), 0x11 for every record in between and 0x51 for last record (if multiple records exist). use 0xD1 if its exactly one record.
+	record->TYPE_LENGTH = typeLen;	// always 0x01 for text
+	record->PAYLOAD_LENGTH = payloadLen+3;	// actual text length+3 (for 3 bytes language description prefix)
+	record->TYPE = type;					// 0x54 for text
+	
+	// allocate memory for PAYLOAD data
+	record->PAYLOAD = (BYTE*)malloc((payloadLen) * sizeof(BYTE));
+	if (record->PAYLOAD) {	// make sure malloc didnt return nllptr
+		memcpy(record->PAYLOAD, payload, payloadLen * sizeof(BYTE));
+	}
+	
+}
+
+struct NDEFMessage {
+	BYTE NDEF_MESSAGE_START;	// 0x03 (T)
+	BYTE NDEF_MESSAGE_LENGTH;	// amount of bytes that follow until NDEF_MESSAGE_END (L)
+	BYTE NDEF_MESSAGE_END;		// 0xFE
+};
+
+void NewNDEFMessage(struct NDEFMessage* message, BYTE msgStart, BYTE msgLen, BYTE msgEnd) {
+	message->NDEF_MESSAGE_START = msgStart;
+	message->NDEF_MESSAGE_LENGTH = msgLen;
+	message->NDEF_MESSAGE_END = msgEnd;
+}
 
 void PrintHex(LPCBYTE pbData, DWORD cbData)
 {
@@ -258,6 +294,113 @@ int DeleteAllUserData() {
 		}
 
 	}
+	return 0;
+}
+
+// defines 3 Short Records (text), then creates valid NDEF message that contains these records
+int NDEFMessageGenerator() {
+	// will put put before start of payload to communicate in which language the text is
+	const BYTE LanguagePrefix[3] = { 0x02, 0x65, 0x6E };	// en = english text record
+
+	// SHORT RECORD 1
+	struct NDEFShortRecord r1;	
+	const BYTE r1Payload[3] = { 0x61, 0x62, 0x63 }; // "abc"
+	NewNDEFShortRecord(&r1, 0x91, 0x01, 0x03, 0x54, &r1Payload);
+	const UINT16 r1Size = sizeof(r1);
+
+	// SHORT RECORD 2
+	struct NDEFShortRecord r2;
+	const BYTE r2Payload[4] = { 0x74, 0x65, 0x73, 0x74 }; // "test"
+	NewNDEFShortRecord(&r2, 0x11, 0x01, 0x04, 0x54, &r2Payload);
+	const UINT16 r2Size = sizeof(r2);
+	
+	// SHORT RECORD 3
+	struct NDEFShortRecord r3;
+	const BYTE r3Payload[2] = { 0x67, 0x67 }; // "gg"
+	NewNDEFShortRecord(&r3, 0x51, 0x01, 0x02, 0x54, &r3Payload);
+	const UINT16 r3Size = sizeof(r3);
+
+	// --------------
+	// now before ndef message can be created calculate its length
+	const BYTE ndefMsgLen = r1.PAYLOAD_LENGTH + r2.PAYLOAD_LENGTH + r3.PAYLOAD_LENGTH + 3*4; // 3 records with 4 byte additional info (RECORD_INFO, TYPE_LENGTH, PAYLOAD_LENGTH, TYPE)
+	// --------------
+
+	// NDEF MESSAGE
+	struct NDEFMessage ndefMsg;
+	NewNDEFMessage(&ndefMsg, 0x03, ndefMsgLen, 0xFE);
+	
+	// --------------
+	// now before full ndef message array can be created and filled determine its total size in bytes
+	BYTE NDEFMessageArraySize = ndefMsgLen + 3;	// +3 because 0x03 0xLEN 0xFE
+	// printf("Reserving 0x%02x bytes \n", NDEFMessageArraySize);
+	// --------------
+	
+	// dynamically allocate enough space for the array that will hold the entire NDEF message
+	BYTE* NDEFMessageArrayPtr = (BYTE*)malloc(NDEFMessageArraySize * sizeof(BYTE));
+	if (!NDEFMessageArrayPtr) {
+		wprintf(L"Failed to allocate memory. Terminating..");
+		return 1;
+	}
+
+	// fill the NDEF message array
+	int indexCounter = 0;
+	//		step 1: add T of TLV (all records together form the V of TLV)
+	memcpy(NDEFMessageArrayPtr, &ndefMsg.NDEF_MESSAGE_START, 1);
+	indexCounter += 1;
+	//		step 2: add L of TLV
+	memcpy(NDEFMessageArrayPtr+indexCounter, &ndefMsgLen, 1);
+	indexCounter += 1;
+
+	//		step 3: add all records
+	//				record 1
+	memcpy(NDEFMessageArrayPtr+indexCounter, &r1, r1Size - 1);					// copy everything (4 bytes) except last byte (5th byte) with is the pointer to payload
+	indexCounter += 4;
+
+	memcpy(NDEFMessageArrayPtr+indexCounter, &LanguagePrefix, 3);				// copy language prefix bytes
+	indexCounter += 3;
+
+	memcpy(NDEFMessageArrayPtr+indexCounter, r1.PAYLOAD, r1.PAYLOAD_LENGTH-3);	// now copy actual payload data
+	indexCounter += r1.PAYLOAD_LENGTH-3;
+	
+	//				record 2
+	memcpy(NDEFMessageArrayPtr + indexCounter, &r2, r2Size - 1);
+	indexCounter += 4;
+
+	memcpy(NDEFMessageArrayPtr + indexCounter, &LanguagePrefix, 3);
+	indexCounter += 3;
+
+	memcpy(NDEFMessageArrayPtr + indexCounter, r2.PAYLOAD, r2.PAYLOAD_LENGTH-3);
+	indexCounter += r2.PAYLOAD_LENGTH-3;
+
+	//				record 3
+	memcpy(NDEFMessageArrayPtr + indexCounter, &r3, r3Size - 1);
+	indexCounter += 4;
+
+	memcpy(NDEFMessageArrayPtr + indexCounter, &LanguagePrefix, 3);
+	indexCounter += 3;
+
+	memcpy(NDEFMessageArrayPtr + indexCounter, r3.PAYLOAD, r3.PAYLOAD_LENGTH-3);
+	indexCounter += r3.PAYLOAD_LENGTH-3;
+
+	// NDEF MESSAGE END
+	memcpy(NDEFMessageArrayPtr + indexCounter, &ndefMsg.NDEF_MESSAGE_END, 1);
+
+	// debug
+	for (int j = 0; j < NDEFMessageArraySize; ++j) {
+		wprintf(L"%02x ", NDEFMessageArrayPtr[j]);
+		if ( (j+1) % 4 == 0) {
+			printf("\n");
+		}
+	}
+
+	// free the dynamically allocated array
+	free(r1.PAYLOAD);
+	free(r2.PAYLOAD);
+	free(r3.PAYLOAD);
+
+	// free(NDEFMessageArrayPtr);		// idk why the program crashes when i try to free this..
+
+	return 0;
 }
 
 int main() {
@@ -267,8 +410,8 @@ int main() {
 
 	// WRITE ONE PAGE
 	/*
-	BYTE Msg[4] = { 0x79, 0x6f, 0x79, 0x6f };
-	BYTE Page = 0x80;	// 0x04 - 0x81 is user data (safe to write). other pages might be dangerous if you are clueless
+	BYTE Msg[4] = { 0x00, 0x00, 0x00, 0x00 };
+	BYTE Page = 0x0D;	// 0x04 - 0x81 is user data (safe to write). other pages might be dangerous if you are clueless
 	if (Page > 0x86 || Page < 0x02) {		// doesnt exist || read only pages
 		wprintf(L"Invalid target page.\n");
 		return -1;
@@ -277,7 +420,9 @@ int main() {
 	*/
 
 	// DELETE ALL USER DATA (NTAG215 ONLY)
-	int status = DeleteAllUserData();
+	// int status = DeleteAllUserData();
 	
+	int status = NDEFMessageGenerator();
+
 	return status;
 }
