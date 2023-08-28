@@ -27,9 +27,9 @@ void NewNDEFShortRecord(struct NDEFShortRecord* record, BYTE recInfo, BYTE typeL
 	record->TYPE = type;					// 0x54 for text
 	
 	// allocate memory for PAYLOAD data
-	record->PAYLOAD = (BYTE*)malloc((payloadLen) * sizeof(BYTE));
-	if (record->PAYLOAD) {	// make sure malloc didnt return nllptr
-		memcpy(record->PAYLOAD, payload, payloadLen * sizeof(BYTE));
+	record->PAYLOAD = malloc(payloadLen);	// malloc without casting is to be prefered in C (but not compatible with C++ compilers)
+	if (record->PAYLOAD) {	// make sure allocation didnt return nllptr
+		memcpy(record->PAYLOAD, payload, payloadLen);
 	}
 	
 }
@@ -332,12 +332,12 @@ int NDEFMessageGenerator() {
 	// --------------
 	// now before full ndef message array can be created and filled determine its total size in bytes
 	BYTE NDEFMessageArraySize = ndefMsgLen + 3;	// +3 because 0x03 0xLEN 0xFE
-	// printf("Reserving 0x%02x bytes \n", NDEFMessageArraySize);
+	printf("Reserving 0x%02x bytes \n", NDEFMessageArraySize);
 	// --------------
 	
 	// dynamically allocate enough space for the array that will hold the entire NDEF message
-	BYTE* NDEFMessageArrayPtr = (BYTE*)malloc(NDEFMessageArraySize * sizeof(BYTE));
-	if (!NDEFMessageArrayPtr) {
+	BYTE* NDEFMessageArrayPtr = malloc(NDEFMessageArraySize);
+	if (NDEFMessageArrayPtr == NULL) {
 		wprintf(L"Failed to allocate memory. Terminating..");
 		return 1;
 	}
@@ -398,7 +398,7 @@ int NDEFMessageGenerator() {
 	free(r2.PAYLOAD);
 	free(r3.PAYLOAD);
 
-	// free(NDEFMessageArrayPtr);		// idk why the program crashes when i try to free this..
+	free(NDEFMessageArrayPtr);		// in visual studio this line crashes when compiling DEBUG, but with RELEASE it works without issues..
 
 	return 0;
 }
